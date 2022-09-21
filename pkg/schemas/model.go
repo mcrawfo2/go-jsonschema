@@ -92,21 +92,21 @@ type Type struct {
 	Version string `json:"$schema,omitempty"` // section 6.1
 	Ref     string `json:"$ref,omitempty"`    // section 7
 	// RFC draft-wright-json-schema-validation-00, section 5
-	MultipleOf           int              `json:"multipleOf,omitempty"`           // section 5.1
-	Maximum              float64          `json:"maximum,omitempty"`              // section 5.2
-	ExclusiveMaximum     bool             `json:"exclusiveMaximum,omitempty"`     // section 5.3
-	Minimum              float64          `json:"minimum,omitempty"`              // section 5.4
-	ExclusiveMinimum     bool             `json:"exclusiveMinimum,omitempty"`     // section 5.5
-	MaxLength            int              `json:"maxLength,omitempty"`            // section 5.6
-	MinLength            int              `json:"minLength,omitempty"`            // section 5.7
-	Pattern              string           `json:"pattern,omitempty"`              // section 5.8
+	MultipleOf           *int             `json:"multipleOf,omitempty"`           // section 5.1
+	Maximum              *float64         `json:"maximum,omitempty"`              // section 5.2
+	ExclusiveMaximum     *bool            `json:"exclusiveMaximum,omitempty"`     // section 5.3
+	Minimum              *float64         `json:"minimum,omitempty"`              // section 5.4
+	ExclusiveMinimum     *bool            `json:"exclusiveMinimum,omitempty"`     // section 5.5
+	MaxLength            *int             `json:"maxLength,omitempty"`            // section 5.6
+	MinLength            *int             `json:"minLength,omitempty"`            // section 5.7
+	Pattern              *string          `json:"pattern,omitempty"`              // section 5.8
 	AdditionalItems      *Type            `json:"additionalItems,omitempty"`      // section 5.9
 	Items                *Type            `json:"items,omitempty"`                // section 5.9
-	MaxItems             int              `json:"maxItems,omitempty"`             // section 5.10
-	MinItems             int              `json:"minItems,omitempty"`             // section 5.11
-	UniqueItems          bool             `json:"uniqueItems,omitempty"`          // section 5.12
-	MaxProperties        int              `json:"maxProperties,omitempty"`        // section 5.13
-	MinProperties        int              `json:"minProperties,omitempty"`        // section 5.14
+	MaxItems             *int             `json:"maxItems,omitempty"`             // section 5.10
+	MinItems             *int             `json:"minItems,omitempty"`             // section 5.11
+	UniqueItems          *bool            `json:"uniqueItems,omitempty"`          // section 5.12
+	MaxProperties        *int             `json:"maxProperties,omitempty"`        // section 5.13
+	MinProperties        *int             `json:"minProperties,omitempty"`        // section 5.14
 	Required             []string         `json:"required,omitempty"`             // section 5.15
 	Properties           map[string]*Type `json:"properties,omitempty"`           // section 5.16
 	PatternProperties    map[string]*Type `json:"patternProperties,omitempty"`    // section 5.17
@@ -125,8 +125,8 @@ type Type struct {
 	Default     interface{} `json:"default,omitempty"`     // section 6.2
 	Format      string      `json:"format,omitempty"`      // section 7
 	// RFC draft-wright-json-schema-hyperschema-00, section 4
-	Media          *Type  `json:"media,omitempty"`          // section 4.3
-	BinaryEncoding string `json:"binaryEncoding,omitempty"` // section 4.3
+	Media          *Type   `json:"media,omitempty"`          // section 4.3
+	BinaryEncoding *string `json:"binaryEncoding,omitempty"` // section 4.3
 
 	// ExtGoCustomType is the name of a (qualified or not) custom Go type
 	// to use for the field.

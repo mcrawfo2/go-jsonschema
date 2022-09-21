@@ -11,7 +11,7 @@ import (
 
 	"gopkg.in/yaml.v2"
 
-	"github.com/atombender/go-jsonschema/pkg/yamlutils"
+	"github.com/mcrawfo2/go-jsonschema/pkg/yamlutils"
 )
 
 func FromJSONFile(fileName string) (*Schema, error) {

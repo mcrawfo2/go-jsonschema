@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/atombender/go-jsonschema/pkg/codegen"
+	"github.com/mcrawfo2/go-jsonschema/pkg/codegen"
 	"github.com/pkg/errors"
 	"github.com/sanity-io/litter"
 )
@@ -141,12 +141,12 @@ type arrayValidator struct {
 	jsonName   string
 	fieldName  string
 	arrayDepth int
-	minItems   int
-	maxItems   int
+	minItems   *int
+	maxItems   *int
 }
 
 func (v *arrayValidator) generate(out *codegen.Emitter) {
-	if v.minItems == 0 && v.maxItems == 0 {
+	if (v.minItems == nil || *v.minItems == 0) && (v.maxItems == nil || *v.maxItems == 0) {
 		return
 	}
 
@@ -167,18 +167,18 @@ func (v *arrayValidator) generate(out *codegen.Emitter) {
 		fieldName = fmt.Sprintf(`fmt.Sprintf(%s, %s)`, fieldName, strings.Join(indexes, ", "))
 	}
 
-	if v.minItems != 0 {
-		out.Println(`if len(%s) < %d {`, value, v.minItems)
+	if v.minItems != nil && *v.minItems != 0 {
+		out.Println(`if len(%s) < %d {`, value, *v.minItems)
 		out.Indent(1)
-		out.Println(`return fmt.Errorf("field %%s length: must be >= %%d", %s, %d)`, fieldName, v.minItems)
+		out.Println(`return fmt.Errorf("field %%s length: must be >= %%d", %s, %d)`, fieldName, *v.minItems)
 		out.Indent(-1)
 		out.Println("}")
 	}
 
-	if v.maxItems != 0 {
-		out.Println(`if len(%s) > %d {`, value, v.maxItems)
+	if v.maxItems != nil && *v.maxItems != 0 {
+		out.Println(`if len(%s) > %d {`, value, *v.maxItems)
 		out.Indent(1)
-		out.Println(`return fmt.Errorf("field %%s length: must be <= %%d", %s, %d)`, fieldName, v.maxItems)
+		out.Println(`return fmt.Errorf("field %%s length: must be <= %%d", %s, %d)`, fieldName, *v.maxItems)
 		out.Indent(-1)
 		out.Println("}")
 	}

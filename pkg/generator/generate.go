@@ -2,14 +2,15 @@ package generator
 
 import (
 	"fmt"
+	"github.com/spf13/cast"
 	"go/format"
 	"os"
 	"path/filepath"
 	"strings"
 	"unicode"
 
-	"github.com/atombender/go-jsonschema/pkg/codegen"
-	"github.com/atombender/go-jsonschema/pkg/schemas"
+	"github.com/mcrawfo2/go-jsonschema/pkg/codegen"
+	"github.com/mcrawfo2/go-jsonschema/pkg/schemas"
 	"github.com/pkg/errors"
 )
 
@@ -439,96 +440,6 @@ func (g *schemaGenerator) generateDeclaredType(
 
 	g.output.file.Package.AddDecl(&decl)
 
-	if structType, ok := theType.(*codegen.StructType); ok {
-		var validators []validator
-		for _, f := range structType.RequiredJSONFields {
-			validators = append(validators, &requiredValidator{f, decl.Name})
-		}
-		for _, f := range structType.Fields {
-			if f.DefaultValue != nil {
-				validators = append(validators, &defaultValidator{
-					jsonName:         f.JSONName,
-					fieldName:        f.Name,
-					defaultValueType: f.Type,
-					defaultValue:     f.DefaultValue,
-				})
-			}
-			if _, ok := f.Type.(codegen.NullType); ok {
-				validators = append(validators, &nullTypeValidator{
-					fieldName: f.Name,
-					jsonName:  f.JSONName,
-				})
-			} else {
-				t, arrayDepth := f.Type, 0
-				for v, ok := t.(*codegen.ArrayType); ok; v, ok = t.(*codegen.ArrayType) {
-					arrayDepth++
-					if _, ok := v.Type.(codegen.NullType); ok {
-						validators = append(validators, &nullTypeValidator{
-							fieldName:  f.Name,
-							jsonName:   f.JSONName,
-							arrayDepth: arrayDepth,
-						})
-						break
-					} else {
-						if f.SchemaType.MinItems != 0 || f.SchemaType.MaxItems != 0 {
-							validators = append(validators, &arrayValidator{
-								fieldName:  f.Name,
-								jsonName:   f.JSONName,
-								arrayDepth: arrayDepth,
-								minItems:   f.SchemaType.MinItems,
-								maxItems:   f.SchemaType.MaxItems,
-							})
-						}
-					}
-
-					t = v.Type
-				}
-			}
-		}
-
-		if len(validators) > 0 {
-			for _, v := range validators {
-				if v.desc().hasError {
-					g.output.file.Package.AddImport("fmt", "")
-					break
-				}
-			}
-
-			g.output.file.Package.AddImport("encoding/json", "")
-			g.output.file.Package.AddDecl(&codegen.Method{
-				Impl: func(out *codegen.Emitter) {
-					out.Comment("UnmarshalJSON implements json.Unmarshaler.")
-					out.Println("func (j *%s) UnmarshalJSON(b []byte) error {", decl.Name)
-					out.Indent(1)
-					out.Println("var %s map[string]interface{}", varNameRawMap)
-					out.Println("if err := json.Unmarshal(b, &%s); err != nil { return err }",
-						varNameRawMap)
-					for _, v := range validators {
-						if v.desc().beforeJSONUnmarshal {
-							v.generate(out)
-						}
-					}
-
-					out.Println("type Plain %s", decl.Name)
-					out.Println("var %s Plain", varNamePlainStruct)
-					out.Println("if err := json.Unmarshal(b, &%s); err != nil { return err }",
-						varNamePlainStruct)
-
-					for _, v := range validators {
-						if !v.desc().beforeJSONUnmarshal {
-							v.generate(out)
-						}
-					}
-
-					out.Println("*j = %s(%s)", decl.Name, varNamePlainStruct)
-					out.Println("return nil")
-					out.Indent(-1)
-					out.Println("}")
-				},
-			})
-		}
-	}
-
 	return &codegen.NamedType{Decl: &decl}, nil
 }
 
@@ -602,6 +513,9 @@ func (g *schemaGenerator) generateStructType(
 				return nil, err
 			}
 		}
+
+		// TODO: other schema tags
+
 		return &codegen.MapType{
 			KeyType:   codegen.PrimitiveType{Type: "string"},
 			ValueType: valueType,
@@ -647,9 +561,9 @@ func (g *schemaGenerator) generateStructType(
 		}
 
 		if isRequired {
-			structField.Tags = fmt.Sprintf(`json:"%s" yaml:"%s"`, name, name)
+			structField.AddTag("json", name)
 		} else {
-			structField.Tags = fmt.Sprintf(`json:"%s,omitempty" yaml:"%s,omitempty"`, name, name)
+			structField.AddTag("json", fmt.Sprintf("%s,omitempty", name))
 		}
 
 		if structField.Comment == "" {
@@ -667,6 +581,9 @@ func (g *schemaGenerator) generateStructType(
 			structField.DefaultValue = prop.Default
 		} else if isRequired {
 			structType.RequiredJSONFields = append(structType.RequiredJSONFields, structField.JSONName)
+			if structField.Type.IsNillable() {
+				structField.AddTag("required", "true")
+			}
 		} else {
 			// Optional, so must be pointer
 			if !structField.Type.IsNillable() {
@@ -674,9 +591,125 @@ func (g *schemaGenerator) generateStructType(
 			}
 		}
 
+		// all the struct tags
+		if err = g.applyStructFieldTags(&structField, prop); err != nil {
+			return nil, err
+		}
+
 		structType.AddField(structField)
 	}
+
+	// optional struct schema field
+	if err := g.applyStructTypeTags(&structType, t); err != nil {
+		return nil, err
+	}
+
 	return &structType, nil
+}
+
+func (g *schemaGenerator) applyStructTypeTags(structType *codegen.StructType, st *schemas.Type) (err error) {
+	structField := codegen.StructField{
+		Name:       "_",
+		Comment:    "_ corresponds to the JSON schema of the parent structure",
+		JSONName:   "-",
+		SchemaType: st,
+		Type:       codegen.EmptyStructType{},
+	}
+
+	if err = g.applyStructFieldTags(&structField, st); err != nil {
+		return err
+	}
+
+	if len(structField.Tags) == 0 {
+		return nil
+	}
+
+	structField.Tags = append(
+		codegen.StructTags{
+			codegen.StructTag{
+				Name:  "json",
+				Value: "-",
+			},
+		},
+		structField.Tags...)
+
+	structType.Fields = append(structType.Fields, structField)
+
+	return nil
+}
+
+func (g *schemaGenerator) applyStructFieldTags(structField *codegen.StructField, prop *schemas.Type) (err error) {
+	errs := []error{
+		g.applyStructFieldTag(structField, "multipleOf", prop.MultipleOf),
+		g.applyStructFieldTag(structField, "maximum", prop.Maximum),
+		g.applyStructFieldTag(structField, "minimum", prop.Minimum),
+		g.applyStructFieldTag(structField, "exclusiveMaximum", prop.ExclusiveMaximum),
+		g.applyStructFieldTag(structField, "exclusiveMinimum", prop.ExclusiveMinimum),
+		g.applyStructFieldTag(structField, "maxLength", prop.MaxLength),
+		g.applyStructFieldTag(structField, "minLength", prop.MinLength),
+		g.applyStructFieldTag(structField, "pattern", prop.Pattern),
+		g.applyStructFieldTag(structField, "maxItems", prop.MaxItems),
+		g.applyStructFieldTag(structField, "minItems", prop.MinItems),
+		g.applyStructFieldTag(structField, "uniqueItems", prop.UniqueItems),
+		g.applyStructFieldTag(structField, "maxProperties", prop.MaxProperties),
+		g.applyStructFieldTag(structField, "minProperties", prop.MinProperties),
+		g.applyStructFieldTag(structField, "enum", prop.Enum),
+		g.applyStructFieldTag(structField, "default", prop.Default),
+		g.applyStructFieldTag(structField, "title", prop.Title),
+		g.applyStructFieldTag(structField, "description", prop.Description),
+		g.applyStructFieldTag(structField, "format", prop.Format),
+	}
+
+	for _, e := range errs {
+		return e
+	}
+
+	return nil
+}
+
+func (g *schemaGenerator) applyStructFieldTag(structField *codegen.StructField, fieldName string, fieldValue interface{}) (err error) {
+	if fieldValue == nil {
+		return
+	}
+
+	if stringValue, ok := fieldValue.(string); ok {
+		if stringValue == "" {
+			return
+		}
+	}
+
+	var val string
+
+	if ifaceSliceValue, ok := fieldValue.([]interface{}); ok {
+		if len(ifaceSliceValue) == 0 {
+			return
+		}
+
+		var results []string
+		for _, elemValue := range ifaceSliceValue {
+			val, err = cast.ToStringE(elemValue)
+			if err != nil {
+				return err
+			}
+			results = append(results, val)
+		}
+
+		if fieldName == "enum" && len(results) == 1 {
+			structField.AddTag("const", results[0])
+			return
+		}
+
+		structField.AddTag(fieldName, strings.Join(results, ","))
+		return
+	}
+
+	val, err = cast.ToStringE(fieldValue)
+	if err == nil {
+		structField.AddTag(fieldName, val)
+	} else if strings.Contains(err.Error(), "(nil)") {
+		err = nil
+	}
+	return err
 }
 
 func (g *schemaGenerator) generateTypeInline(
@@ -692,6 +725,17 @@ func (g *schemaGenerator) generateTypeInline(
 			}
 		}
 
+		pointer := false
+		if len(t.Type) == 2 {
+			if t.Type[0] == "null" {
+				pointer = true
+				t.Type = t.Type[1:]
+			} else if t.Type[1] == "null" {
+				pointer = true
+				t.Type = t.Type[:1]
+			}
+		}
+
 		if len(t.Type) > 1 {
 			g.warner("Property has multiple types; will be represented as interface{} with no validation")
 			return codegen.EmptyInterfaceType{}, nil
@@ -701,7 +745,7 @@ func (g *schemaGenerator) generateTypeInline(
 		}
 
 		if schemas.IsPrimitiveType(t.Type[0]) {
-			return codegen.PrimitiveTypeFromJSONSchemaType(t.Type[0], false)
+			return codegen.PrimitiveTypeFromJSONSchemaType(t.Type[0], pointer)
 		}
 
 		if t.Type[0] == schemas.TypeNameArray {
@@ -790,11 +834,11 @@ func (g *schemaGenerator) generateEnumType(
 
 	g.output.declsByName[enumDecl.Name] = &enumDecl
 
-	valueConstant := &codegen.Var{
-		Name:  "enumValues_" + enumDecl.Name,
-		Value: t.Enum,
-	}
-	g.output.file.Package.AddDecl(valueConstant)
+	//valueConstant := &codegen.Var{
+	//	Name:  enumDecl.Name + "_Values",
+	//	Value: t.Enum,
+	//}
+	//g.output.file.Package.AddDecl(valueConstant)
 
 	if wrapInStruct {
 		g.output.file.Package.AddImport("encoding/json", "")
@@ -810,36 +854,38 @@ func (g *schemaGenerator) generateEnumType(
 		})
 	}
 
-	g.output.file.Package.AddImport("fmt", "")
-	g.output.file.Package.AddImport("reflect", "")
-	g.output.file.Package.AddImport("encoding/json", "")
-	g.output.file.Package.AddDecl(&codegen.Method{
-		Impl: func(out *codegen.Emitter) {
-			out.Comment("UnmarshalJSON implements json.Unmarshaler.")
-			out.Println("func (j *%s) UnmarshalJSON(b []byte) error {", enumDecl.Name)
-			out.Indent(1)
-			out.Print("var v ")
-			enumType.Generate(out)
-			out.Newline()
-			varName := "v"
-			if wrapInStruct {
-				varName += ".Value"
-			}
-			out.Println("if err := json.Unmarshal(b, &%s); err != nil { return err }", varName)
-			out.Println("var ok bool")
-			out.Println("for _, expected := range %s {", valueConstant.Name)
-			out.Println("if reflect.DeepEqual(%s, expected) { ok = true; break }", varName)
-			out.Println("}")
-			out.Println("if !ok {")
-			out.Println(`return fmt.Errorf("invalid value (expected one of %%#v): %%#v", %s, %s)`,
-				valueConstant.Name, varName)
-			out.Println("}")
-			out.Println(`*j = %s(v)`, enumDecl.Name)
-			out.Println(`return nil`)
-			out.Indent(-1)
-			out.Println("}")
-		},
-	})
+	/*
+		g.output.file.Package.AddImport("fmt", "")
+		g.output.file.Package.AddImport("reflect", "")
+		g.output.file.Package.AddImport("encoding/json", "")
+		g.output.file.Package.AddDecl(&codegen.Method{
+			Impl: func(out *codegen.Emitter) {
+				out.Comment("UnmarshalJSON implements json.Unmarshaler.")
+				out.Println("func (j *%s) UnmarshalJSON(b []byte) error {", enumDecl.Name)
+				out.Indent(1)
+				out.Print("var v ")
+				enumType.Generate(out)
+				out.Newline()
+				varName := "v"
+				if wrapInStruct {
+					varName += ".Value"
+				}
+				out.Println("if err := json.Unmarshal(b, &%s); err != nil { return err }", varName)
+				out.Println("var ok bool")
+				out.Println("for _, expected := range %s {", valueConstant.Name)
+				out.Println("if reflect.DeepEqual(%s, expected) { ok = true; break }", varName)
+				out.Println("}")
+				out.Println("if !ok {")
+				out.Println(`return fmt.Errorf("invalid value (expected one of %%#v): %%#v", %s, %s)`,
+					valueConstant.Name, varName)
+				out.Println("}")
+				out.Println(`*j = %s(v)`, enumDecl.Name)
+				out.Println(`return nil`)
+				out.Indent(-1)
+				out.Println("}")
+			},
+		})
+	*/
 
 	// TODO: May be aliased string type
 	if prim, ok := enumType.(codegen.PrimitiveType); ok && prim.Type == "string" {

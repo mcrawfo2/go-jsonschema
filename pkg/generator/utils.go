@@ -6,8 +6,8 @@ import (
 	"sort"
 	"unicode"
 
-	"github.com/atombender/go-jsonschema/pkg/codegen"
-	"github.com/atombender/go-jsonschema/pkg/schemas"
+	"github.com/mcrawfo2/go-jsonschema/pkg/codegen"
+	"github.com/mcrawfo2/go-jsonschema/pkg/schemas"
 )
 
 func hashArrayOfValues(values []interface{}) string {
@@ -93,10 +93,10 @@ func isNamedType(t codegen.Type) bool {
 	switch x := t.(type) {
 	case *codegen.NamedType:
 		return true
+	case *codegen.CustomNameType:
+		return true
 	case *codegen.PointerType:
-		if _, ok := x.Type.(*codegen.NamedType); ok {
-			return true
-		}
+		return isNamedType(x.Type)
 	}
 	return false
 }
