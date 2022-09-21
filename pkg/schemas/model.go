@@ -157,7 +157,8 @@ func (value *Type) UnmarshalJSON(raw []byte) error {
 }
 
 type GoJSONSchemaExtension struct {
-	Type       *string  `json:"type,omitempty"`
-	Identifier *string  `json:"identifier,omitempty"`
-	Imports    []string `json:"imports,omitempty"`
+	Type       *string           `json:"type,omitempty"`
+	Identifier *string           `json:"identifier,omitempty"`
+	Imports    []string          `json:"imports,omitempty"`
+	Tags       map[string]string `json:"tags,omitempty"`
 }

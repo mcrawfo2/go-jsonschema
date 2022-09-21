@@ -1,9 +1,10 @@
 package generator
 
 import (
+	"bytes"
 	"fmt"
+	"github.com/iancoleman/strcase"
 	"github.com/spf13/cast"
-	"go/format"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,190 +16,123 @@ import (
 )
 
 type Config struct {
-	SchemaMappings     []SchemaMapping
-	Capitalizations    []string
-	ResolveExtensions  []string
-	YAMLExtensions     []string
-	DefaultPackageName string
-	DefaultOutputName  string
-	Warner             func(string)
+	Capitalizations []string
+	Warner          func(string)
 }
 
-type SchemaMapping struct {
-	SchemaID    string
+type Source struct {
 	PackageName string
 	RootType    string
-	OutputName  string
+	Folder      string
+	Data        []byte
+	schema      *schemas.Schema
 }
 
 type Generator struct {
-	config                Config
-	outputs               map[string]*output
-	schemaCacheByFileName map[string]*schemas.Schema
-	inScope               map[qualifiedDefinition]struct{}
-	warner                func(string)
+	config    Config
+	sources   []Source
+	outputs   map[string]*output
+	outputted map[string]struct{}
+	inScope   map[qualifiedDefinition]struct{}
+	warner    func(string)
 }
 
 func New(config Config) (*Generator, error) {
 	return &Generator{
-		config:                config,
-		outputs:               map[string]*output{},
-		schemaCacheByFileName: map[string]*schemas.Schema{},
-		inScope:               map[qualifiedDefinition]struct{}{},
-		warner:                config.Warner,
+		config:    config,
+		outputs:   map[string]*output{},
+		outputted: map[string]struct{}{},
+		inScope:   map[qualifiedDefinition]struct{}{},
+		warner:    config.Warner,
 	}, nil
 }
 
-func (g *Generator) Sources() map[string][]byte {
-	sources := make(map[string]*strings.Builder, len(g.outputs))
+func (g *Generator) Files() []codegen.File {
+	var sources []codegen.File
 	for _, output := range g.outputs {
 		if output.file.FileName == "" {
 			continue
 		}
+		if _, ok := g.outputted[output.file.FileName]; ok {
+			// only output each file once
+			continue
+		}
+		g.outputted[output.file.FileName] = struct{}{}
+		sources = append(sources, *output.file)
+	}
+	return sources
+}
+
+func (g *Generator) Outputs() map[string][]byte {
+	files := g.Files()
+	results := make(map[string][]byte, len(files))
+	for _, file := range files {
 		emitter := codegen.NewEmitter(80)
-		output.file.Generate(emitter)
-
-		sb, ok := sources[output.file.FileName]
-		if !ok {
-			sb = &strings.Builder{}
-			sources[output.file.FileName] = sb
-		}
-		_, _ = sb.WriteString(emitter.String())
+		file.Generate(emitter)
+		results[file.FileName] = emitter.Bytes()
 	}
-
-	result := make(map[string][]byte, len(sources))
-	for f, sb := range sources {
-		source := []byte(sb.String())
-		src, err := format.Source(source)
-		if err != nil {
-			g.config.Warner(fmt.Sprintf("The generated code could not be formatted automatically; "+
-				"falling back to unformatted: %s", err))
-			src = source
-		}
-		result[f] = src
-	}
-	return result
+	return results
 }
 
-func (g *Generator) DoFile(fileName string) error {
-	var err error
-	var schema *schemas.Schema
-	if fileName == "-" {
-		schema, err = schemas.FromJSONReader(os.Stdin)
-		if err != nil {
-			return errors.Wrap(err, "error parsing from standard input")
-		}
-	} else {
-		schema, err = g.parseFile(fileName)
-		if err != nil {
-			return errors.Wrapf(err, "error parsing from file %s", fileName)
-		}
+func (g *Generator) AddSource(source Source) (err error) {
+	source.schema, err = g.parseSchema(source.Data)
+	if err != nil {
+		return err
 	}
-	return g.addFile(fileName, schema)
-}
 
-func (g *Generator) parseFile(fileName string) (*schemas.Schema, error) {
-	// TODO: Refactor into some kind of loader
-	isYAML := false
-	for _, yamlExt := range g.config.YAMLExtensions {
-		if strings.HasSuffix(fileName, yamlExt) {
-			isYAML = true
-			break
-		}
-	}
-	if isYAML {
-		return schemas.FromYAMLFile(fileName)
-	} else {
-		return schemas.FromJSONFile(fileName)
-	}
-}
+	g.sources = append(g.sources, source)
 
-func (g *Generator) addFile(fileName string, schema *schemas.Schema) error {
-	o, err := g.findOutputFileForSchemaID(schema.ID)
+	o, err := g.findOutputFileForDefinition(source.RootType, source.PackageName, source.Folder)
 	if err != nil {
 		return err
 	}
 
 	return (&schemaGenerator{
-		Generator:      g,
-		schema:         schema,
-		schemaFileName: fileName,
-		output:         o,
+		Generator:    g,
+		schema:       source.schema,
+		output:       o,
+		rootTypeName: source.RootType,
 	}).generateRootType()
 }
 
+func (g *Generator) parseSchema(data []byte) (*schemas.Schema, error) {
+	isYaml := len(data) == 0 || data[0] != '{'
+	dataReader := bytes.NewReader(data)
+	if isYaml {
+		return schemas.FromYAMLReader(dataReader)
+	} else {
+		return schemas.FromJSONReader(dataReader)
+	}
+}
+
 func (g *Generator) loadSchemaFromFile(fileName, parentFileName string) (*schemas.Schema, error) {
-	if !filepath.IsAbs(fileName) {
-		fileName = filepath.Join(filepath.Dir(parentFileName), fileName)
-	}
-
-	exts := append([]string{""}, g.config.ResolveExtensions...)
-	for i, ext := range exts {
-		qualified := fileName + ext
-
-		// Poor man's resolving loop
-		if i < len(exts)-1 && !fileExists(qualified) {
-			continue
-		}
-
-		var err error
-		qualified, err = filepath.EvalSymlinks(qualified)
-		if err != nil {
-			return nil, err
-		}
-
-		if schema, ok := g.schemaCacheByFileName[qualified]; ok {
-			return schema, nil
-		}
-
-		schema, err := g.parseFile(qualified)
-		if err != nil {
-			return nil, err
-		}
-		g.schemaCacheByFileName[qualified] = schema
-
-		if err = g.addFile(qualified, schema); err != nil {
-			return nil, err
-		}
-		return schema, nil
-	}
-	return nil, fmt.Errorf("could not resolve schema %q", fileName)
+	// TODO: implement a loader
+	return nil, errors.New("loadSchemaFromFile not implemented")
 }
 
-func (g *Generator) getRootTypeName(schema *schemas.Schema, fileName string) string {
-	for _, m := range g.config.SchemaMappings {
-		if m.SchemaID == schema.ID && m.RootType != "" {
-			return m.RootType
-		}
-	}
-	return g.identifierFromFileName(fileName)
-}
-
-func (g *Generator) findOutputFileForSchemaID(id string) (*output, error) {
-	if o, ok := g.outputs[id]; ok {
+func (g *Generator) findOutputFileForDefinition(definition string, packageName string, folder string) (*output, error) {
+	if o, ok := g.outputs[definition]; ok {
 		return o, nil
 	}
 
-	for _, m := range g.config.SchemaMappings {
-		if m.SchemaID == id {
-			return g.beginOutput(id, m.OutputName, m.PackageName)
-		}
-	}
-	return g.beginOutput(id, g.config.DefaultOutputName, g.config.DefaultPackageName)
+	outputName := filepath.Join(folder, strcase.ToSnake(definition)+".go")
+
+	return g.beginOutput(definition, outputName, packageName)
 }
 
 func (g *Generator) beginOutput(
-	id string,
-	outputName, packageName string) (*output, error) {
+	definition string,
+	outputName,
+	packageName string) (*output, error) {
 	if packageName == "" {
-		return nil, fmt.Errorf("unable to map schema URI %q to a Go package name", id)
+		return nil, fmt.Errorf("unable to map schema URI %q to a Go package name", definition)
 	}
 
 	for _, o := range g.outputs {
 		if o.file.FileName == outputName && o.file.Package.QualifiedName != packageName {
 			return nil, fmt.Errorf(
 				"conflict: same file (%s) mapped to two different Go packages (%q and %q) for schema %q",
-				o.file.FileName, o.file.Package.QualifiedName, packageName, id)
+				o.file.FileName, o.file.Package.QualifiedName, packageName, definition)
 		}
 		if o.file.FileName == outputName && o.file.Package.QualifiedName == packageName {
 			return o, nil
@@ -218,7 +152,7 @@ func (g *Generator) beginOutput(
 		declsBySchema: map[*schemas.Type]*codegen.TypeDecl{},
 		declsByName:   map[string]*codegen.TypeDecl{},
 	}
-	g.outputs[id] = output
+	g.outputs[definition] = output
 	return output, nil
 }
 
@@ -227,18 +161,6 @@ func (g *Generator) makeEnumConstantName(typeName, value string) string {
 		return typeName + "_" + g.identifierize(value)
 	}
 	return typeName + g.identifierize(value)
-}
-
-func (g *Generator) identifierFromFileName(fileName string) string {
-	s := filepath.Base(fileName)
-	for _, ext := range g.config.ResolveExtensions {
-		trimmed := strings.TrimSuffix(s, ext)
-		if trimmed == s {
-			break
-		}
-		s = trimmed
-	}
-	return g.identifierize(s)
 }
 
 func (g *Generator) identifierize(s string) string {
@@ -272,9 +194,9 @@ func (g *Generator) capitalize(s string) string {
 
 type schemaGenerator struct {
 	*Generator
-	output         *output
-	schema         *schemas.Schema
-	schemaFileName string
+	output       *output
+	schema       *schemas.Schema
+	rootTypeName string
 }
 
 func (g *schemaGenerator) generateRootType() error {
@@ -282,74 +204,49 @@ func (g *schemaGenerator) generateRootType() error {
 		return errors.New("schema has no root")
 	}
 
-	for _, name := range sortDefinitionsByName(g.schema.Definitions) {
-		def := g.schema.Definitions[name]
-		_, err := g.generateDeclaredType(def, newNameScope(g.identifierize(name)))
-		if err != nil {
-			return err
-		}
-	}
+	//for _, name := range sortDefinitionsByName(g.schema.Definitions) {
+	//	def := g.schema.Definitions[name]
+	//	_, err := g.generateDeclaredType(def, newNameScope(g.identifierize(name)))
+	//	if err != nil {
+	//		return err
+	//	}
+	//}
 	if len(g.schema.ObjectAsType.Type) == 0 {
 		return nil
 	}
 
-	rootTypeName := g.getRootTypeName(g.schema, g.schemaFileName)
-	if _, ok := g.output.declsByName[rootTypeName]; ok {
+	if _, ok := g.output.declsByName[g.rootTypeName]; ok {
 		return nil
 	}
 
-	_, err := g.generateDeclaredType((*schemas.Type)(g.schema.ObjectAsType), newNameScope(rootTypeName))
+	_, err := g.generateDeclaredType((*schemas.Type)(g.schema.ObjectAsType), newNameScope(g.rootTypeName))
 	return err
 }
 
 func (g *schemaGenerator) generateReferencedType(ref string) (codegen.Type, error) {
-	var fileName, scope, defName string
-	if i := strings.IndexRune(ref, '#'); i == -1 {
-		fileName = ref
-	} else {
-		fileName, scope = ref[0:i], ref[i+1:]
-		if !strings.HasPrefix(strings.ToLower(scope), "/definitions/") {
-			return nil, fmt.Errorf("unsupported $ref format; must point to definition within file: %q", ref)
-		}
-		defName = scope[13:]
+	var scope, defName string
+	i := strings.IndexRune(ref, '#')
+	scope = ref[i+1:]
+	if !strings.HasPrefix(strings.ToLower(scope), "/definitions/") {
+		return nil, fmt.Errorf("unsupported $ref format; must point to definition within file: %q", ref)
 	}
-
-	var schema *schemas.Schema
-	if fileName != "" {
-		var err error
-		schema, err = g.loadSchemaFromFile(fileName, g.schemaFileName)
-		if err != nil {
-			return nil, fmt.Errorf("could not follow $ref %q to file %q: %s", ref, fileName, err)
-		}
-	} else {
-		schema = g.schema
-	}
+	defName = scope[13:]
 
 	qual := qualifiedDefinition{
-		schema: schema,
+		schema: g.schema,
 		name:   defName,
 	}
 
 	var def *schemas.Type
-	if defName != "" {
-		// TODO: Support nested definitions
-		var ok bool
-		def, ok = schema.Definitions[defName]
-		if !ok {
-			return nil, fmt.Errorf("definition %q (from ref %q) does not exist in schema", defName, ref)
-		}
-		if len(def.Type) == 0 && len(def.Properties) == 0 {
-			return &codegen.EmptyInterfaceType{}, nil
-		}
-		defName = g.identifierize(defName)
-	} else {
-		def = (*schemas.Type)(schema.ObjectAsType)
-		defName = g.getRootTypeName(schema, fileName)
-		if len(def.Type) == 0 {
-			// Minor hack to make definitions default to being objects
-			def.Type = schemas.TypeList{schemas.TypeNameObject}
-		}
+	var ok bool
+	def, ok = g.schema.Definitions[defName]
+	if !ok {
+		return nil, fmt.Errorf("definition %q (from ref %q) does not exist in schema", defName, ref)
 	}
+	if len(def.Type) == 0 && len(def.Properties) == 0 {
+		return &codegen.EmptyInterfaceType{}, nil
+	}
+	defName = g.identifierize(defName)
 
 	_, isCycle := g.inScope[qual]
 	if !isCycle {
@@ -360,20 +257,19 @@ func (g *schemaGenerator) generateReferencedType(ref string) (codegen.Type, erro
 	}
 
 	var sg *schemaGenerator
-	if fileName != "" {
-		output, err := g.findOutputFileForSchemaID(schema.ID)
-		if err != nil {
-			return nil, err
-		}
+	output, err := g.findOutputFileForDefinition(defName, g.output.file.Package.Name(), filepath.Dir(g.output.file.FileName))
+	if err != nil {
+		return nil, err
+	}
 
-		sg = &schemaGenerator{
-			Generator:      g.Generator,
-			schema:         schema,
-			schemaFileName: fileName,
-			output:         output,
-		}
-	} else {
-		sg = g
+	//output.declsBySchema = g.output.declsBySchema
+	//output.declsByName = g.output.declsByName
+
+	sg = &schemaGenerator{
+		Generator:    g.Generator,
+		output:       output,
+		schema:       g.schema,
+		rootTypeName: g.rootTypeName,
 	}
 
 	t, err := sg.generateDeclaredType(def, newNameScope(defName))
@@ -412,6 +308,8 @@ func (g *schemaGenerator) generateReferencedType(ref string) (codegen.Type, erro
 func (g *schemaGenerator) generateDeclaredType(
 	t *schemas.Type, scope nameScope) (codegen.Type, error) {
 	if decl, ok := g.output.declsBySchema[t]; ok {
+		return &codegen.NamedType{Decl: decl}, nil
+	} else if decl, ok = g.output.declsByName[scope.string()]; ok {
 		return &codegen.NamedType{Decl: decl}, nil
 	}
 
@@ -658,6 +556,15 @@ func (g *schemaGenerator) applyStructFieldTags(structField *codegen.StructField,
 		g.applyStructFieldTag(structField, "title", prop.Title),
 		g.applyStructFieldTag(structField, "description", prop.Description),
 		g.applyStructFieldTag(structField, "format", prop.Format),
+	}
+
+	if prop.GoJSONSchemaExtension != nil {
+		for k, v := range prop.GoJSONSchemaExtension.Tags {
+			structField.RemoveTag(k)
+			if v != "" {
+				structField.AddTag(k, v)
+			}
+		}
 	}
 
 	for _, e := range errs {

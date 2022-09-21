@@ -366,3 +366,12 @@ func (f *StructField) AddTag(name, value string) {
 		Value: value,
 	})
 }
+
+func (f *StructField) RemoveTag(name string) {
+	for n := range f.Tags {
+		if f.Tags[n].Name == name {
+			f.Tags = append(f.Tags[:n], f.Tags[n+1:]...)
+			return
+		}
+	}
+}
