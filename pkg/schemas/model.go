@@ -112,13 +112,14 @@ type Type struct {
 	PatternProperties    map[string]*Type `json:"patternProperties,omitempty"`    // section 5.17
 	AdditionalProperties *Type            `json:"additionalProperties,omitempty"` // section 5.18
 	Dependencies         map[string]*Type `json:"dependencies,omitempty"`         // section 5.19
-	Enum                 []interface{}    `json:"enum,omitempty"`                 // section 5.20
-	Type                 TypeList         `json:"type,omitempty"`                 // section 5.21
-	AllOf                []*Type          `json:"allOf,omitempty"`                // section 5.22
-	AnyOf                []*Type          `json:"anyOf,omitempty"`                // section 5.23
-	OneOf                []*Type          `json:"oneOf,omitempty"`                // section 5.24
-	Not                  *Type            `json:"not,omitempty"`                  // section 5.25
-	Definitions          Definitions      `json:"definitions,omitempty"`          // section 5.26
+	Const                *interface{}     `json:"const,omitempty"`
+	Enum                 []interface{}    `json:"enum,omitempty"`        // section 5.20
+	Type                 TypeList         `json:"type,omitempty"`        // section 5.21
+	AllOf                []*Type          `json:"allOf,omitempty"`       // section 5.22
+	AnyOf                []*Type          `json:"anyOf,omitempty"`       // section 5.23
+	OneOf                []*Type          `json:"oneOf,omitempty"`       // section 5.24
+	Not                  *Type            `json:"not,omitempty"`         // section 5.25
+	Definitions          Definitions      `json:"definitions,omitempty"` // section 5.26
 	// RFC draft-wright-json-schema-validation-00, section 6, 7
 	Title       string      `json:"title,omitempty"`       // section 6.1
 	Description string      `json:"description,omitempty"` // section 6.1
@@ -131,6 +132,13 @@ type Type struct {
 	// ExtGoCustomType is the name of a (qualified or not) custom Go type
 	// to use for the field.
 	GoJSONSchemaExtension *GoJSONSchemaExtension `json:"goJSONSchema,omitempty"`
+}
+
+func (value *Type) EnumValues() []interface{} {
+	if value.Const != nil {
+		return []interface{}{*value.Const}
+	}
+	return value.Enum
 }
 
 // UnmarshalJSON accepts booleans as schemas where `true` is equivalent to `{}`

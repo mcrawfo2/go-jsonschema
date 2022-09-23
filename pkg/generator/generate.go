@@ -313,7 +313,7 @@ func (g *schemaGenerator) generateDeclaredType(
 		return &codegen.NamedType{Decl: decl}, nil
 	}
 
-	if t.Enum != nil {
+	if t.EnumValues() != nil {
 		return g.generateEnumType(t, scope)
 	}
 
@@ -354,7 +354,7 @@ func (g *schemaGenerator) generateType(
 			return &codegen.CustomNameType{Type: *ext.Type}, nil
 		}
 	}
-	if t.Enum != nil {
+	if t.EnumValues() != nil {
 		return g.generateEnumType(t, scope)
 	}
 	if t.Ref != "" {
@@ -552,6 +552,7 @@ func (g *schemaGenerator) applyStructFieldTags(structField *codegen.StructField,
 		g.applyStructFieldTag(structField, "maxProperties", prop.MaxProperties),
 		g.applyStructFieldTag(structField, "minProperties", prop.MinProperties),
 		g.applyStructFieldTag(structField, "enum", prop.Enum),
+		g.applyStructFieldTag(structField, "const", prop.Const),
 		g.applyStructFieldTag(structField, "default", prop.Default),
 		g.applyStructFieldTag(structField, "title", prop.Title),
 		g.applyStructFieldTag(structField, "description", prop.Description),
@@ -622,7 +623,7 @@ func (g *schemaGenerator) applyStructFieldTag(structField *codegen.StructField, 
 func (g *schemaGenerator) generateTypeInline(
 	t *schemas.Type,
 	scope nameScope) (codegen.Type, error) {
-	if t.Enum == nil && t.Ref == "" {
+	if t.EnumValues() == nil && t.Ref == "" {
 		if ext := t.GoJSONSchemaExtension; ext != nil {
 			for _, pkg := range ext.Imports {
 				g.output.file.Package.AddImport(pkg, "")
@@ -674,7 +675,7 @@ func (g *schemaGenerator) generateTypeInline(
 
 func (g *schemaGenerator) generateEnumType(
 	t *schemas.Type, scope nameScope) (codegen.Type, error) {
-	if len(t.Enum) == 0 {
+	if len(t.EnumValues()) == 0 {
 		return nil, errors.New("enum array cannot be empty")
 	}
 
@@ -693,7 +694,7 @@ func (g *schemaGenerator) generateEnumType(
 		}
 
 		var primitiveType string
-		for _, v := range t.Enum {
+		for _, v := range t.EnumValues() {
 			var valueType string
 			if v == nil {
 				valueType = "interface{}"
@@ -796,7 +797,7 @@ func (g *schemaGenerator) generateEnumType(
 
 	// TODO: May be aliased string type
 	if prim, ok := enumType.(codegen.PrimitiveType); ok && prim.Type == "string" {
-		for _, v := range t.Enum {
+		for _, v := range t.EnumValues() {
 			if s, ok := v.(string); ok {
 				// TODO: Make sure the name is unique across scope
 				g.output.file.Package.AddDecl(&codegen.Constant{
