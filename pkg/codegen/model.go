@@ -337,6 +337,15 @@ func (t StructTags) String() string {
 	return sb.String()
 }
 
+func (t StructTags) HasTag(name string) bool {
+	for _, tag := range t {
+		if tag.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 type StructField struct {
 	Name         string
 	Type         Type
