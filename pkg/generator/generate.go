@@ -257,7 +257,7 @@ func (g *schemaGenerator) generateReferencedType(ref string) (codegen.Type, erro
 	}
 
 	var sg *schemaGenerator
-	output, err := g.findOutputFileForDefinition(defName, g.output.file.Package.Name(), filepath.Dir(g.output.file.FileName))
+	output, err := g.findOutputFileForDefinition(defName, g.output.file.Package.QualifiedName, filepath.Dir(g.output.file.FileName))
 	if err != nil {
 		return nil, err
 	}
