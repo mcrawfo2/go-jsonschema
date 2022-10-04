@@ -601,7 +601,7 @@ func (g *schemaGenerator) applyStructFieldTag(structField *codegen.StructField, 
 			}
 			results = append(results, val)
 		}
-
+		
 		if fieldName == "enum" && len(results) == 1 {
 			structField.AddTag("const", results[0])
 			return
@@ -732,84 +732,83 @@ func (g *schemaGenerator) generateEnumType(
 				},
 			},
 		}
+
 	}
 
 	enumDecl := codegen.TypeDecl{
 		Name: g.output.uniqueTypeName(scope.string()),
 		Type: enumType,
 	}
-	g.output.file.Package.AddDecl(&enumDecl)
 
-	g.output.declsByName[enumDecl.Name] = &enumDecl
+	if primType, ok := enumType.(codegen.PrimitiveType); !ok {
+		g.output.file.Package.AddDecl(&enumDecl)
 
-	//valueConstant := &codegen.Var{
-	//	Name:  enumDecl.Name + "_Values",
-	//	Value: t.Enum,
-	//}
-	//g.output.file.Package.AddDecl(valueConstant)
+		g.output.declsByName[enumDecl.Name] = &enumDecl
 
-	if wrapInStruct {
-		g.output.file.Package.AddImport("encoding/json", "")
 		g.output.file.Package.AddDecl(&codegen.Method{
 			Impl: func(out *codegen.Emitter) {
-				out.Comment("MarshalJSON implements json.Marshaler.")
-				out.Println("func (j *%s) MarshalJSON() ([]byte, error) {", enumDecl.Name)
-				out.Indent(1)
-				out.Println("return json.Marshal(j.Value)")
-				out.Indent(-1)
-				out.Println("}")
-			},
-		})
-	}
-
-	/*
-		g.output.file.Package.AddImport("fmt", "")
-		g.output.file.Package.AddImport("reflect", "")
-		g.output.file.Package.AddImport("encoding/json", "")
-		g.output.file.Package.AddDecl(&codegen.Method{
-			Impl: func(out *codegen.Emitter) {
-				out.Comment("UnmarshalJSON implements json.Unmarshaler.")
-				out.Println("func (j *%s) UnmarshalJSON(b []byte) error {", enumDecl.Name)
-				out.Indent(1)
-				out.Print("var v ")
-				enumType.Generate(out)
-				out.Newline()
-				varName := "v"
-				if wrapInStruct {
-					varName += ".Value"
+				valueResult := &codegen.Var{
+					Name:  "result",
+					Type:  codegen.ArrayType{Type: codegen.EmptyInterfaceType{}},
+					Value: t.EnumValues(),
 				}
-				out.Println("if err := json.Unmarshal(b, &%s); err != nil { return err }", varName)
-				out.Println("var ok bool")
-				out.Println("for _, expected := range %s {", valueConstant.Name)
-				out.Println("if reflect.DeepEqual(%s, expected) { ok = true; break }", varName)
-				out.Println("}")
-				out.Println("if !ok {")
-				out.Println(`return fmt.Errorf("invalid value (expected one of %%#v): %%#v", %s, %s)`,
-					valueConstant.Name, varName)
-				out.Println("}")
-				out.Println(`*j = %s(v)`, enumDecl.Name)
-				out.Println(`return nil`)
+
+				out.Println("func (j %s) Enum() []interface{} {", enumDecl.Name)
+				out.Indent(1)
+				valueResult.Generate(out)
+				out.Println("")
+				out.Println("return result")
 				out.Indent(-1)
 				out.Println("}")
 			},
 		})
-	*/
 
-	// TODO: May be aliased string type
-	if prim, ok := enumType.(codegen.PrimitiveType); ok && prim.Type == "string" {
-		for _, v := range t.EnumValues() {
-			if s, ok := v.(string); ok {
-				// TODO: Make sure the name is unique across scope
-				g.output.file.Package.AddDecl(&codegen.Constant{
-					Name:  g.makeEnumConstantName(enumDecl.Name, s),
-					Type:  &codegen.NamedType{Decl: &enumDecl},
-					Value: s,
-				})
+		if wrapInStruct {
+			g.output.file.Package.AddImport("encoding/json", "")
+			g.output.file.Package.AddDecl(&codegen.Method{
+				Impl: func(out *codegen.Emitter) {
+					out.Comment("MarshalJSON implements json.Marshaler.")
+					out.Println("func (j *%s) MarshalJSON() ([]byte, error) {", enumDecl.Name)
+					out.Indent(1)
+					out.Println("return json.Marshal(j.Value)")
+					out.Indent(-1)
+					out.Println("}")
+				},
+			})
+		}
+
+		// TODO: May be aliased string type
+		if prim, ok := enumType.(codegen.PrimitiveType); ok && prim.Type == "string" {
+			for _, v := range t.EnumValues() {
+				if s, ok := v.(string); ok {
+					// TODO: Make sure the name is unique across scope
+					g.output.file.Package.AddDecl(&codegen.Constant{
+						Name:  g.makeEnumConstantName(enumDecl.Name, s),
+						Type:  &codegen.NamedType{Decl: &enumDecl},
+						Value: s,
+					})
+				}
 			}
 		}
-	}
 
-	return &codegen.NamedType{Decl: &enumDecl}, nil
+		return &codegen.NamedType{Decl: &enumDecl}, nil
+	} else {
+		// TODO: May be aliased string type
+		if primType.Type == "string" {
+			for _, v := range t.EnumValues() {
+				if s, ok := v.(string); ok {
+					// TODO: Make sure the name is unique across scope
+					g.output.file.Package.AddDecl(&codegen.Constant{
+						Name:  g.makeEnumConstantName(enumDecl.Name, s),
+						Type:  primType,
+						Value: s,
+					})
+				}
+			}
+		}
+
+		return primType, nil
+	}
 }
 
 type output struct {
