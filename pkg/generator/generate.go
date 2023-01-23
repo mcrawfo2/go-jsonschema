@@ -17,7 +17,8 @@ import (
 
 type Config struct {
 	Capitalizations []string
-	Warner          func(string)
+	Warner          func(message string)
+	OutputFiler     func(definition string) string
 }
 
 type Source struct {
@@ -115,7 +116,14 @@ func (g *Generator) findOutputFileForDefinition(definition string, packageName s
 		return o, nil
 	}
 
-	outputName := filepath.Join(folder, strcase.ToSnake(definition)+".go")
+	filer := g.config.OutputFiler
+	if filer == nil {
+		filer = func(definition string) string {
+			return strcase.ToSnake(definition) + ".go"
+		}
+	}
+
+	outputName := filepath.Join(folder, filer(definition))
 
 	return g.beginOutput(definition, outputName, packageName)
 }
@@ -464,10 +472,10 @@ func (g *schemaGenerator) generateStructType(
 			structField.AddTag("json", fmt.Sprintf("%s,omitempty", name))
 		}
 
-		if structField.Comment == "" {
-			structField.Comment = fmt.Sprintf("%s corresponds to the JSON schema field %q.",
-				structField.Name, name)
-		}
+		//if structField.Comment == "" {
+		//	structField.Comment = fmt.Sprintf("%s corresponds to the JSON schema field %q.",
+		//		structField.Name, name)
+		//}
 
 		var err error
 		structField.Type, err = g.generateTypeInline(prop, scope.add(structField.Name))
