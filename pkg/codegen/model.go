@@ -304,9 +304,6 @@ func (s *StructType) Generate(out *Emitter) {
 	out.Indent(1)
 	i := 0
 	for _, f := range s.Fields {
-		if i > 0 {
-			out.Newline()
-		}
 		f.Generate(out)
 		out.Newline()
 		i++

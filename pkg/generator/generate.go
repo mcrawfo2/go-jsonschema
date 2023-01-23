@@ -176,6 +176,15 @@ func (g *Generator) identifierize(s string) string {
 		return "Blank"
 	}
 
+	// strip prefix
+	firstPeriodIndex := strings.Index(s, ".")
+	if firstPeriodIndex >= 0 && firstPeriodIndex < len(s)-1 {
+		s = s[firstPeriodIndex+1:]
+	}
+
+	// remove periods
+	s = strings.ReplaceAll(s, ".", "")
+
 	// FIXME: Better handling of non-identifier chars
 	var sb strings.Builder
 	for _, part := range splitIdentifierByCaseAndSeparators(s) {
@@ -219,6 +228,9 @@ func (g *schemaGenerator) generateRootType() error {
 	//		return err
 	//	}
 	//}
+
+	// TODO: AllOf (eg anonymous members)
+
 	if len(g.schema.ObjectAsType.Type) == 0 {
 		return nil
 	}
@@ -254,7 +266,6 @@ func (g *schemaGenerator) generateReferencedType(ref string) (codegen.Type, erro
 	if len(def.Type) == 0 && len(def.Properties) == 0 {
 		return &codegen.EmptyInterfaceType{}, nil
 	}
-	defName = g.identifierize(defName)
 
 	_, isCycle := g.inScope[qual]
 	if !isCycle {
@@ -280,7 +291,9 @@ func (g *schemaGenerator) generateReferencedType(ref string) (codegen.Type, erro
 		rootTypeName: g.rootTypeName,
 	}
 
-	t, err := sg.generateDeclaredType(def, newNameScope(defName))
+	structName := g.identifierize(defName)
+
+	t, err := sg.generateDeclaredType(def, newNameScope(structName))
 	if err != nil {
 		return nil, err
 	}
@@ -331,6 +344,9 @@ func (g *schemaGenerator) generateDeclaredType(
 	}
 	g.output.declsBySchema[t] = &decl
 	g.output.declsByName[decl.Name] = &decl
+
+	// MC: clean identifier
+	decl.Name = g.identifierize(decl.Name)
 
 	theType, err := g.generateType(t, scope)
 	if err != nil {
@@ -609,7 +625,7 @@ func (g *schemaGenerator) applyStructFieldTag(structField *codegen.StructField, 
 			}
 			results = append(results, val)
 		}
-		
+
 		if fieldName == "enum" && len(results) == 1 {
 			structField.AddTag("const", results[0])
 			return
