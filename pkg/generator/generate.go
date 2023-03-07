@@ -166,9 +166,9 @@ func (g *Generator) beginOutput(
 
 func (g *Generator) makeEnumConstantName(typeName, value string) string {
 	if strings.ContainsAny(typeName[len(typeName)-1:], "0123456789") {
-		return typeName + "_" + g.identifierize(value)
+		return typeName + "_" + g.capitalize(g.identifierize(value))
 	}
-	return typeName + g.identifierize(value)
+	return typeName + g.capitalize(g.identifierize(value))
 }
 
 func (g *Generator) identifierize(s string) string {
@@ -187,8 +187,11 @@ func (g *Generator) identifierize(s string) string {
 
 	// FIXME: Better handling of non-identifier chars
 	var sb strings.Builder
-	for _, part := range splitIdentifierByCaseAndSeparators(s) {
-		_, _ = sb.WriteString(g.capitalize(part))
+	for i, part := range splitIdentifierByCaseAndSeparators(s) {
+		if i > 0 {
+			part = g.capitalize(part)
+		}
+		_, _ = sb.WriteString(part)
 	}
 	ident := sb.String()
 	if !unicode.IsLetter(rune(ident[0])) {
@@ -456,7 +459,7 @@ func (g *schemaGenerator) generateStructType(
 		prop := t.Properties[name]
 		isRequired := requiredNames[name]
 
-		fieldName := g.identifierize(name)
+		fieldName := g.capitalize(g.identifierize(name))
 		if ext := prop.GoJSONSchemaExtension; ext != nil {
 			for _, pkg := range ext.Imports {
 				g.output.file.Package.AddImport(pkg, "")
